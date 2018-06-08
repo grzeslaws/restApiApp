@@ -66,6 +66,7 @@ export default class Todo extends Vue {
       this.todos = response.todos;
       this.paginate = response.paginate;
     });
+    // return userService.getTodoAll().then(console.log)
   }
 
   deleteTodoOnSubmit(id: number) {

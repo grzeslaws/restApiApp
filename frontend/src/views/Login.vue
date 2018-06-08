@@ -13,7 +13,7 @@
         <label>Repeat password </label>
         <input v-model="passwordRepeat">
       </div>
-      <button @click="login()" type="submit">Send</button>
+      <button @click="login()" type="submit">Login</button>
     </form>
   </div>
 </template>
@@ -41,7 +41,5 @@ export default class Login extends Vue {
         this.$router.push("/users");
       });
   }
-  
-
 }
 </script>

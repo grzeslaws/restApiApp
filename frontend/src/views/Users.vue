@@ -33,7 +33,6 @@
 <script lang="ts">
 import { Component, Vue } from "vue-property-decorator";
 import userService from "@/services/UserService.vue";
-import { log } from 'util';
 
 @Component
 export default class Users extends Vue {
@@ -43,25 +42,23 @@ export default class Users extends Vue {
   admin = false;
 
   created() {
-    this.getUsers();
+    this.getUsers()
   }
 
-  getUsers() {
-    userService.getUsers()
-      .then(response => {
-        this.users = [...response.users];
-      })
+  getUsers(): void {
+    userService.getUsers().then(response => {
+      this.users = [...response.users];
+    });
   }
 
   createUse() {
     const payload = {
-     username: this.username,
-     password: this.password,
-     admin: this.admin 
-    }
+      username: this.username,
+      password: this.password,
+      admin: this.admin
+    };
 
-    this.$http.post("user", payload)
-      .then(console.log);
+    this.$http.post("user", payload).then(console.log);
   }
 }
 </script>

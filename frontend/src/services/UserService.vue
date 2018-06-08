@@ -11,6 +11,10 @@ class UserService extends Vue {
     return this.$http.get(`todo/${pageNumber}`).then(response => response.json());
   }
 
+  public getTodoAll(): PromiseLike<any> {
+    return this.$http.get(`todos`).then(response => response.json());
+  }
+
   public addTodo(value: {}): PromiseLike<any> {
     const payload = value;
     return this.$http.post("todo", payload).then(response => response.json());

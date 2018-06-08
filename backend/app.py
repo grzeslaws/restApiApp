@@ -1,5 +1,5 @@
-from flask import Flask, request, jsonify, make_response, url_for
-from flask_sqlalchemy import SQLAlchemy 
+from flask import Flask, request, jsonify, make_response, url_for, redirect, flash
+from flask_sqlalchemy import SQLAlchemy
 import uuid
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt
@@ -8,38 +8,141 @@ from functools import wraps
 from flask_cors import CORS
 from flask_mail import Mail, Message
 from itsdangerous import URLSafeTimedSerializer, SignatureExpired
+from flask_marshmallow import Marshmallow
+from marshmallow import Schema, fields, pprint
 
-app = Flask(__name__)
+from flask_dance.contrib.twitter import make_twitter_blueprint, twitter
+from flask_dance.consumer.backend.sqla import OAuthConsumerMixin, SQLAlchemyBackend
+from flask_dance.consumer import oauth_authorized
+from sqlalchemy.orm.exc import NoResultFound
+from flask_login import LoginManager, login_user, UserMixin, current_user, logout_user, login_required
+
+app = Flask(__name__) 
 CORS(app)
 
-app.config.from_pyfile("config.cfg") 
+# twitter login
+twitter_blueprint = make_twitter_blueprint(api_key='Wxheh706myGRPdIzg1UG8NCmD', api_secret='z2gPTdT8v1pCTNEX7xxtf0bbqLwLJgfiqgdgDa03GTf7M5m13T')
+app.register_blueprint(twitter_blueprint, url_prefix='/twitter_login')
+login_manager = LoginManager() 
+login_manager.init_app(app)
+login_manager.login_view = "login"
+login_manager.login_message_category = "info"
+login_manager.refresh_view = "index"
+
+app.config.from_pyfile("config.cfg")
 mail = Mail(app)
 
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = True
 # app.config['SQLALCHEMY_ECHO'] = True
 
 app.config["SECRET_KEY"] = "thisissecretkey"
-# app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:////Users/grzesiek/tests/flaskRestApi/data.db"
-app.config["SQLALCHEMY_DATABASE_URI"] = "mysql://root:admin@localhost/flask_api"
+app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:////Users/grzesiek/tests/restApiApp/backend/data.db"
+# app.config["SQLALCHEMY_DATABASE_URI"] = "mysql://root:admin@localhost/flask_api"
 
-app.config["WHOOSHEE_DIR"] = 'whoosheers'
+app.config["WHOOSHEE_DIR"] = 'whoosheers' 
+
 db = SQLAlchemy(app)
+ma = Marshmallow(app)
 
 s = URLSafeTimedSerializer(app.config["SECRET_KEY"])
 
 
-class User(db.Model):
+class User(UserMixin, db.Model):
+    __tablename__ = "User"
     id = db.Column(db.Integer, primary_key=True)
     public_id = db.Column(db.String(50), unique=True)
     username = db.Column(db.String(50))
-    password = db.Column(db.String(200))
-    admin = db.Column(db.Boolean)
+    password = db.Column(db.String(200)) 
+    admin = db.Column(db.Boolean) 
+
 
 class Todo(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     text = db.Column(db.String(50))
     complete = db.Column(db.Boolean)
     user_id = db.Column(db.String(50))
+
+class OAuth(OAuthConsumerMixin, db.Model):
+    user_id = db.Column(db.Integer, db.ForeignKey(User.id))
+    user = db.relationship(User)
+
+class UserSchema(ma.ModelSchema):
+    class Meta:
+        model = User
+
+class TodoSchema(ma.ModelSchema):
+    class Meta:
+        model = Todo
+
+twitter_blueprint.backend = SQLAlchemyBackend(OAuth, db.session, user = current_user, user_required=False)
+
+@app.route('/twitter') 
+def twitter_login():
+    
+    if not twitter.authorized:
+        print('\x1b[6;30;42m' + 'sdsdsds' + '\x1b[0m')
+        return redirect(url_for('twitter.login'))
+
+    account_info = twitter.get('account/settings.json')
+    account_info_json = account_info.json()
+
+    return '<h1>Your Twitter name is @{}'.format(account_info_json['screen_name']) 
+
+@oauth_authorized.connect_via(twitter_blueprint)
+def twitter_logged_in(blueprint, token):
+    
+    if not token:
+        flash("Failed to log in with Twitter.", category="error")
+        return False
+
+    account_info_settings = twitter.get('account/settings.json')
+    account_info_settings_json = account_info_settings.json()
+    account_info = blueprint.session.get('account/verify_credentials.json')
+
+    if not account_info.ok:
+        msg = "Failed to fetch user info from Twitter." 
+        flash(msg, category="error")
+        return False
+
+    account_info_json = account_info.json()
+    twitter_user_id = str(account_info_json["id"])
+
+    query = OAuth.query.filter_by(
+        provider = blueprint.name,
+        id = twitter_user_id
+    )
+
+    try:
+        oauth = query.one()
+        login_user(oauth.user)
+    except NoResultFound:
+        oauth = OAuth(
+            provider = blueprint.name,
+            id = twitter_user_id,
+            token = token,
+        )
+    
+    if oauth.user:
+        login_user(oauth.user)
+        flash("Successfull signed by Twitter!")
+
+    else:
+        user = User(
+            # email = "grzesupel@gmail.com",
+            username = account_info_settings_json["screen_name"]
+        )
+
+        oauth.user = user
+        db.session.add_all([user, oauth])
+        db.session.commit()
+        login_user(user)
+        flash("Successfull created account by Twitter!")
+
+    return False
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(int(user_id))
 
 
 def token_required(f):
@@ -70,7 +173,6 @@ def token_required(f):
 def search_text():
     keywords = request.args.get("keywords")
     print("keywords: ", keywords)
-    # result = Todo.query.whooshee_search('asa').all()
     result = db.engine.execute(
         "SELECT todo.id AS todo_id, todo.text AS todo_text, todo.complete AS todo_complete, todo.user_id AS todo_user_id FROM todo")
     print(result)
@@ -86,21 +188,15 @@ def get_all_users(current_user):
     if not current_user.admin:
         return jsonify({"message": "Cannoot perform that function!"})
 
-    data = []
     users = User.query.all()
 
     if not users:
         return jsonify({"message": "No users found!"})
 
-    for user in users:
-        user_data = {}
-        user_data["username"] = user.username
-        user_data["password"] = user.password
-        user_data["public_id"] = user.public_id
-        user_data["admin"] = user.admin
-        data.append(user_data)
+    user_schema = UserSchema(many=True)
+    result = user_schema.dump(users)
 
-    return jsonify({"users": data})
+    return jsonify({"users": result})
 
 
 @app.route("/user/<public_id>", methods=["GET"])
@@ -186,37 +282,24 @@ def login():
 @token_required
 def get_all_todo(current_user):
     todos = Todo.query.all()
-    todos_return = []
 
-    for item in todos:
-        todo = {}
-        todo["id"] = item.id
-        todo["text"] = item.text
-        todo["complete"] = item.complete
-        todo["user_id"] = item.user_id
-        todos_return.append(todo)
-
-    return jsonify({"todos": todos_return})
+    todo_schema = TodoSchema(many=True)
+    result = todo_schema.dump(todos)
+    return jsonify({"todos": result})
 
 
 @app.route("/todo/<int:page_num>", methods=["GET"])
 @token_required
 def get_todo(current_user, page_num):
 
-    todos_return = []
-
     todos = Todo.query.filter_by(user_id=current_user.public_id).paginate(
         per_page=5, page=page_num, error_out=False)
-    for item in todos.items:
-        todo = {}
-        todo["id"] = item.id
-        todo["text"] = item.text
-        todo["complete"] = item.complete
-        todo["user_id"] = item.user_id
-        todos_return.append(todo)
+
+    todo_schema = TodoSchema(many=True)
+    result = todo_schema.dump(todos.items)
 
     return jsonify({
-        "todos": todos_return,
+        "todos": result,
         "paginate": {
             "pages": todos.pages,
             "page": todos.page,
